@@ -58,6 +58,7 @@ class PluginDownload(object):
                 'type': 'object',
                 'properties': {
                     'path': {'type': 'string', 'format': 'path'},
+                    'encoding': {'type': 'string'},
                     'fail_html': {'type': 'boolean', 'default': True},
                     'overwrite': {'type': 'boolean', 'default': False},
                     'temp': {'type': 'string', 'format': 'path'}
@@ -78,6 +79,7 @@ class PluginDownload(object):
         if not config.get('path'):
             config['require_path'] = True
         config.setdefault('fail_html', True)
+        config.setdefault('encoding', 'latin1')
         return config
 
     def on_task_download(self, task, config):
@@ -87,10 +89,10 @@ class PluginDownload(object):
         tmp = config.get('temp', os.path.join(task.manager.config_base, 'temp'))
 
         self.get_temp_files(task, require_path=config.get('require_path', False), fail_html=config['fail_html'],
-                            tmp_path=tmp)
+                            tmp_path=tmp, encoding=config['encoding'])
 
     def get_temp_file(self, task, entry, require_path=False, handle_magnets=False, fail_html=True,
-                      tmp_path=tempfile.gettempdir()):
+                      tmp_path=tempfile.gettempdir(), encoding='latin1'):
         """
         Download entry content and store in temporary folder.
         Fails entry with a reason if there was problem.
@@ -125,7 +127,7 @@ class PluginDownload(object):
                 # Don't fail here, there might be a magnet later in the list of urls
                 log.debug('Skipping url %s because there is no path for download' % url)
                 continue
-            error = self.process_entry(task, entry, url, tmp_path)
+            error = self.process_entry(task, entry, url, tmp_path, encoding)
 
             # disallow html content
             html_mimes = ['html', 'text/html']
@@ -158,7 +160,7 @@ class PluginDownload(object):
             outfile.write(page)
 
     def get_temp_files(self, task, require_path=False, handle_magnets=False, fail_html=True,
-                       tmp_path=tempfile.gettempdir()):
+                       tmp_path=tempfile.gettempdir(), encoding='latin1'):
         """Download all task content and store in temporary folder.
 
         :param bool require_path:
@@ -172,10 +174,10 @@ class PluginDownload(object):
           path to use for temporary files while downloading
         """
         for entry in task.accepted:
-            self.get_temp_file(task, entry, require_path, handle_magnets, fail_html, tmp_path)
+            self.get_temp_file(task, entry, require_path, handle_magnets, fail_html, tmp_path, encoding)
 
     # TODO: a bit silly method, should be get rid of now with simplier exceptions ?
-    def process_entry(self, task, entry, url, tmp_path):
+    def process_entry(self, task, entry, url, tmp_path, encoding):
         """
         Processes `entry` by using `url`. Does not use entry['url'].
         Does not fail the `entry` if there is a network issue, instead just logs and returns a string error.
@@ -192,7 +194,7 @@ class PluginDownload(object):
             else:
                 if not task.manager.unit_test:
                     log.info('Downloading: %s' % entry['title'])
-                self.download_entry(task, entry, url, tmp_path)
+                self.download_entry(task, entry, url, tmp_path, encoding)
         except RequestException as e:
             log.warning('RequestException %s, while downloading %s' % (e, url))
             return 'Network error during request: %s' % e
@@ -213,7 +215,7 @@ class PluginDownload(object):
             log.debug(msg, exc_info=True)
             return msg
 
-    def download_entry(self, task, entry, url, tmp_path):
+    def download_entry(self, task, entry, url, tmp_path, encoding):
         """Downloads `entry` by using `url`.
 
         :raises: Several types of exceptions ...
@@ -305,7 +307,7 @@ class PluginDownload(object):
         # prefer content-disposition naming, note: content-disposition can be disabled completely
         # by setting entry field `content-disposition` to False
         if entry.get('content-disposition', True):
-            self.filename_from_headers(entry, response)
+            self.filename_from_headers(entry, response, encoding)
         else:
             log.info('Content-disposition disabled for %s' % entry['title'])
         self.filename_ext_from_mime(entry)
@@ -316,7 +318,7 @@ class PluginDownload(object):
             entry['filename'] = filename
         log.debug('Finishing download_entry() with filename %s' % entry.get('filename'))
 
-    def filename_from_headers(self, entry, response):
+    def filename_from_headers(self, entry, response, encoding):
         """Checks entry filename if it's found from content-disposition"""
         if not response.headers.get('content-disposition'):
             # No content disposition header, nothing we can do
@@ -326,8 +328,8 @@ class PluginDownload(object):
         if filename:
             # try to decode to unicode, specs allow latin1, some may do utf-8 anyway
             try:
-                filename = filename.decode('latin1')
-                log.debug('filename header latin1 decoded')
+                filename = filename.decode(encoding)
+                log.debug('filename header %s decoded' % encoding)
             except UnicodeError:
                 try:
                     filename = filename.decode('utf-8')
